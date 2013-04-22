@@ -26,8 +26,9 @@ Encoder.prototype.rem = function(bits){
 	this.n -= bits;
 };
 Encoder.prototype.encode = function(){
-	if(this.peek(7)<96){
-		this.push(this.peek(8)+32);
+	var b1 = this.peek(8);
+	if(128<=b1&&b1<224){
+		this.push(b1+32);
 		this.rem(8);
 	}else{
 		this.push(this.peek(7)+32);
@@ -47,7 +48,7 @@ Decoder.prototype.data = function(data){
 		if(data[i]<32)continue;
 		b1 = data[i]-32;
 		this.b |= b1 << this.n;
-		if((b1&0x7f)<96) this.n += 8;
+		if(128<=b1&&b1<224) this.n += 8;
 		else this.n += 7;
 		while(this.n>=8){
 			this.push(this.peek(8));
@@ -78,18 +79,16 @@ var v = new Encoder(function(it){ console.log(it); });
 v.data(new Buffer("hallo"));
 v.end();
 */
-//var dec = new Decoder(function(it){ console.log(it); });
-var dec = new Decoder(function(it){ console.log(String.fromCharCode(it)); });
-//var enc = new Encoder(function(it){ console.log('>',it); dec.data([it]); });
-var enc = new Encoder(function(it){ console.log('>',String.fromCharCode(it)); dec.data([it]); });
-//var enc = new Encoder(function(it){ dec.data([it]); });
-enc.data(new Buffer("hallo"));
+var dec = new Decoder(function(it){ console.log(it); });
+//var dec = new Decoder(function(it){ console.log(String.fromCharCode(it)); });
+var enc = new Encoder(function(it){ console.log('>',it); dec.data([it]); });
 //for(var i=0;i<256;++i)
 //	enc.data([i]);
 //for(var i=128;i<224;++i)enc.data([i]);
 //for(var i=0;i<256;++i)enc.data([i]);
-//for(var i=0;i<128;++i)enc.data([i]);
+for(var i=0;i<128;++i)enc.data([i]);
 enc.end();
 dec.end();
+
 
 
