@@ -8,14 +8,19 @@ import "github.com/maxymania/langtransf/parsing"
 
 const syntax = `
 
-expr1	= Int|Ident;
+expr1	= ~("assign" Ident "="#- expr)
+		| Int
+		| Ident;
 expr1x	= ~("binop" ("*"|"/"|"%") expr1 );
 expr2	= expr1 expr1x*;
 expr2x	= ~("binop" ("+"|"-") expr2 );
 
 expr	= expr2 expr2x*;
 
-//statement	= ("{" statement* #e "}" #E ) #p;
+type		= ~("type" Ident ("."#- Ident)* );
+statement	= ~("decl" type Ident ~("init" "="#- expr)? ";" #- )
+			| ~("expr" expr ";"#- )
+			| ("{"#- statement*#e "}"#-) #p;
 
 `
 
@@ -30,6 +35,6 @@ func Parse(src io.Reader) (a *ast.AST,e *syntaxfile.ErrorRecorder,ok bool){
 	token := new(parsing.StdScanner).Init(syntax_km,src).FirstToken()
 	a = new(ast.AST)
 	e = new(syntaxfile.ErrorRecorder)
-	ok = nil!=syntax_obj["expr"].Parse(syntax_obj,token,a,e)
+	ok = nil!=syntax_obj["statement"].Parse(syntax_obj,token,a,e)
 	return
 }
