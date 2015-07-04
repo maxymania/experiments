@@ -1,0 +1,12 @@
+package com.example.package;
+
+import ola.os.OS;
+
+class Example{
+	int main(string[] args){
+		OS.out.write("Hello World\n");
+		OS.out.flush();
+	}
+}
+
+
