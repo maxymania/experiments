@@ -4,6 +4,7 @@ import "fmt"
 import "errors"
 import "io"
 import "github.com/maxymania/langtransf/ast"
+import "objlang/tsys"
 
 type VarAllocator map[string]bool
 func (v VarAllocator) Alloc(s string) string {
@@ -19,85 +20,24 @@ func (v VarAllocator) Alloc(s string) string {
 	}
 }
 
-type RegisterAlloc struct{
-	M map[string]int
-	C int
-}
-func (r *RegisterAlloc) Init(){
-	r.M = make(map[string]int)
-}
-func (r *RegisterAlloc) Alloc() string{
-	g := fmt.Sprintf("r%d",r.C)
-	for k,rc := range r.M {
-		if rc==0 {
-			g = k
-			goto done
-		}
-	}
-	r.C++
-	done:
-	r.M[g]++
-	return g
-}
-func (r *RegisterAlloc) Incr(s string) {
-	r.M[s]++
-}
-func (r *RegisterAlloc) Decr(s string) {
-	r.M[s]--
-}
-
 type Var struct{
 	Name string
-	Type string
+	Type tsys.DTYPE
 }
 
 type CompileContext struct{
 	V VarAllocator
-	R *RegisterAlloc
+	R *tsys.RegisterAlloc
 	Vars map[string]Var
 }
 
 func (c *CompileContext) Init(){
 	c.V = make(VarAllocator)
-	c.R = new(RegisterAlloc)
+	c.R = new(tsys.RegisterAlloc)
 	c.R.Init()
 	c.Vars = make(map[string]Var)
 }
-func (c *CompileContext) TComb(o1,op,o2 string) (op2 string,r string,e error){
-	op2=op
-	switch o1{
-	case "integer":
-		switch o2{
-		case "integer","number":
-			r = o2
-			switch op{
-			case "/":
-				r = "number"
-				return
-			case "+","-","*","%":
-				return
-			}
-		}
-	case "number":
-		switch o2{
-		case "integer","number":
-			r = "number"
-			switch op{
-			case "+","-","*","/","%":
-				return
-			}
-		}
-	}
-	return
-}
-func (c *CompileContext) Free(s string){
-	switch s[0]{
-	case 'r':
-		c.R.Decr(s)
-	}
-}
-func (c *CompileContext) CompileExpr(dest io.Writer, a []*ast.AST) (tname string,res string,err error) {
-	//res = c.R.Alloc()
+func (c *CompileContext) CompileExpr(dest io.Writer, a []*ast.AST) (tname tsys.DTYPE,res string,err error) {
 	for i,bit := range a {
 		if i==0 {
 			switch bit.Head{
@@ -109,10 +49,20 @@ func (c *CompileContext) CompileExpr(dest io.Writer, a []*ast.AST) (tname string
 				}
 				tname = v.Type
 				res = v.Name
-				_,itn,e := c.CompileExpr(dest,bit.Childs[1:])
+				ot,itn,e := c.CompileExpr(dest,bit.Childs[1:])
 				if e!=nil { err=e; return }
+				if tname.Name()!=ot.Name(){
+					cst,re := tname.Cast(itn,ot,c.R)
+					if re=="" {
+						err = errors.New("invalid cast: ("+tname.Name()+")"+ot.Name() )
+						return
+					}
+					fmt.Fprint(dest,cst)
+					c.R.Decr(itn)
+					itn = re
+				}
 				fmt.Fprintf(dest, "%s = %s\n",res,itn)
-				c.Free(itn)
+				c.R.Decr(itn)
 				continue
 			default:
 				if bit.Head!="" {
@@ -122,7 +72,7 @@ func (c *CompileContext) CompileExpr(dest io.Writer, a []*ast.AST) (tname string
 			}
 			switch bit.Token.Type() {
 			case "Int":
-				tname = "integer"
+				tname = tsys.FIXTYPES["integer"]
 				res = " "+bit.Content
 				continue
 			case "Ident":
@@ -138,12 +88,6 @@ func (c *CompileContext) CompileExpr(dest io.Writer, a []*ast.AST) (tname string
 			err = errors.New("unsupported type")
 			return
 		} else {
-			o1 := res
-			if res[0]=='r' {
-				c.R.Incr(res)
-			}else{
-				res = c.R.Alloc()
-			}
 			switch bit.Head {
 			case "binop":
 				op := bit.Childs[0].Content
@@ -151,12 +95,16 @@ func (c *CompileContext) CompileExpr(dest io.Writer, a []*ast.AST) (tname string
 				case "+","-","*","/","%":
 					o2t,o2,e := c.CompileExpr(dest,bit.Childs[1:])
 					if e!=nil { err=e; return }
-					nop,rt,e := c.TComb(tname,op,o2t)
-					if e!=nil { err=e; return }
-					tname=rt
-					fmt.Fprintf(dest,"%s = %s %s %s\n",res,o1,nop,o2)
-					c.Free(o1)
-					c.Free(o2)
+					code,rg,rt := tname.Binop(o2t,op,res,o2,c.R)
+					if rt==nil {
+						err = errors.New("invalid op: "+tname.Name()+op+o2t.Name())
+						return
+					}
+					fmt.Fprint(dest,code)
+					c.R.Decr(res)
+					c.R.Decr(o2)
+					res = rg
+					tname = rt
 				}
 			}
 		}
@@ -169,20 +117,20 @@ func (c *CompileContext) CompileStatement(dest io.Writer, a []*ast.AST) (err err
 		case "decl":
 			name := bit.Childs[1].Content
 			regist := c.V.Alloc(name)
-			vtyp := "integer" // TODO: change
+			vtyp := tsys.FIXTYPES["integer"] // TODO: change
 			c.Vars[name] = Var{regist,vtyp}
 			if  len(bit.Childs)>2 {
 				if bit.Childs[2].Head=="init" {
 					_,res,e := c.CompileExpr(dest,bit.Childs[2].Childs)
 					if e!=nil { err=e; return }
 					fmt.Fprintf(dest,"%s = %s\n",regist,res) // TODO: change -> cast
-					c.Free(res)
+					c.R.Decr(res)
 				}
 			}
 		case "expr":
 			_,res,e := c.CompileExpr(dest,bit.Childs)
 			if e!=nil { err=e; return }
-			c.Free(res)
+			c.R.Decr(res)
 		}
 	}
 	return
